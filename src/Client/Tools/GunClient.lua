@@ -392,14 +392,16 @@ local function onToolEquipped()
 	idleRunningTrack = loadAnimation(AnimationIds.IdleRunning)
 
 	-- Set animation properties
+	-- Use Action priority so arm animations override the sprint animation's arms
+	-- Since these animations only affect arms, they will layer on top of full-body animations
 	if idleTrack then
 		idleTrack.Looped = true
-		idleTrack.Priority = Enum.AnimationPriority.Movement
+		idleTrack.Priority = Enum.AnimationPriority.Action
 	end
 
 	if idleRunningTrack then
 		idleRunningTrack.Looped = true
-		idleRunningTrack.Priority = Enum.AnimationPriority.Movement
+		idleRunningTrack.Priority = Enum.AnimationPriority.Action
 	end
 
 	--[[
