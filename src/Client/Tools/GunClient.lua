@@ -11,7 +11,6 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
-local Lighting = game:GetService("Lighting")
 
 -- Player references
 local player = Players.LocalPlayer
@@ -27,8 +26,8 @@ local Config = {
 	DefaultFOV = 70,
 	ZoomTweenTime = 0.2,
 
-	-- Blur settings for vignette effect
-	VignetteBlurSize = 24,
+	-- Walk speed when aiming (to cancel sprint)
+	AimingWalkSpeed = 8,
 }
 
 --------------------------------------------------------------------------------
@@ -70,89 +69,8 @@ local isEquipped = false
 local isZooming = false
 local currentAnimationState = "none" -- "idle", "running", "none"
 
--- Vignette GUI elements
-local vignetteGui = nil
-local blurEffect = nil
-
---------------------------------------------------------------------------------
--- VIGNETTE BLUR EFFECT SETUP
---------------------------------------------------------------------------------
-
-local function createVignetteGui()
-	-- Create ScreenGui for vignette effect
-	vignetteGui = Instance.new("ScreenGui")
-	vignetteGui.Name = "GunVignetteGui"
-	vignetteGui.ResetOnSpawn = false
-	vignetteGui.IgnoreGuiInset = true
-	vignetteGui.Enabled = false
-	vignetteGui.Parent = player:WaitForChild("PlayerGui")
-
-	-- Create the vignette frame (dark edges)
-	local vignetteFrame = Instance.new("Frame")
-	vignetteFrame.Name = "VignetteFrame"
-	vignetteFrame.Size = UDim2.new(1, 0, 1, 0)
-	vignetteFrame.Position = UDim2.new(0, 0, 0, 0)
-	vignetteFrame.BackgroundTransparency = 1
-	vignetteFrame.Parent = vignetteGui
-
-	-- Create radial gradient effect using UIGradient
-	local uiGradient = Instance.new("UIGradient")
-	uiGradient.Name = "VignetteGradient"
-	-- Radial-style vignette using transparency gradient
-	uiGradient.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),      -- Center is fully transparent
-		NumberSequenceKeypoint.new(0.5, 1),    -- Still transparent
-		NumberSequenceKeypoint.new(0.7, 0.8),  -- Starting to show
-		NumberSequenceKeypoint.new(1, 0.3),    -- Edges are darker
-	})
-	uiGradient.Color = ColorSequence.new(Color3.new(0, 0, 0))
-	uiGradient.Parent = vignetteFrame
-
-	-- Set the frame to show the gradient
-	vignetteFrame.BackgroundColor3 = Color3.new(0, 0, 0)
-	vignetteFrame.BackgroundTransparency = 0.7
-
-	-- Create corner darkening frames for enhanced vignette effect
-	local corners = {"TopLeft", "TopRight", "BottomLeft", "BottomRight"}
-	local cornerPositions = {
-		TopLeft = UDim2.new(0, 0, 0, 0),
-		TopRight = UDim2.new(0.5, 0, 0, 0),
-		BottomLeft = UDim2.new(0, 0, 0.5, 0),
-		BottomRight = UDim2.new(0.5, 0, 0.5, 0),
-	}
-
-	for _, cornerName in ipairs(corners) do
-		local corner = Instance.new("Frame")
-		corner.Name = cornerName
-		corner.Size = UDim2.new(0.5, 0, 0.5, 0)
-		corner.Position = cornerPositions[cornerName]
-		corner.BackgroundColor3 = Color3.new(0, 0, 0)
-		corner.BackgroundTransparency = 0.85
-		corner.BorderSizePixel = 0
-		corner.Parent = vignetteFrame
-
-		local cornerGradient = Instance.new("UIGradient")
-		cornerGradient.Rotation = cornerName == "TopLeft" and 135
-			or cornerName == "TopRight" and 225
-			or cornerName == "BottomLeft" and 45
-			or 315
-		cornerGradient.Transparency = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 1),
-			NumberSequenceKeypoint.new(0.6, 1),
-			NumberSequenceKeypoint.new(1, 0),
-		})
-		cornerGradient.Parent = corner
-	end
-
-	-- Create blur effect in Lighting
-	blurEffect = Instance.new("BlurEffect")
-	blurEffect.Name = "GunZoomBlur"
-	blurEffect.Size = 0
-	blurEffect.Enabled = false
-	blurEffect.Parent = Lighting
-
-	return vignetteGui
-end
+-- Aiming state value (for cross-script communication)
+local aimingValue = nil
 
 --------------------------------------------------------------------------------
 -- ANIMATION FUNCTIONS
@@ -220,34 +138,34 @@ local function playIdleRunningAnimation()
 	end
 end
 
---[[
 --------------------------------------------------------------------------------
--- EQUIP ANIMATION (COMMENTED OUT - ADD ASSET ID ABOVE TO ENABLE)
+-- AIMING STATE MANAGEMENT
 --------------------------------------------------------------------------------
 
-local function playEquipAnimation()
-	if equipTrack then
-		-- Stop other animations temporarily
-		if idleTrack and idleTrack.IsPlaying then
-			idleTrack:Stop()
-		end
-		if idleRunningTrack and idleRunningTrack.IsPlaying then
-			idleRunningTrack:Stop()
-		end
-
-		-- Play equip animation
-		equipTrack:Play()
-
-		-- Wait for equip animation to finish, then transition to idle
-		equipTrack.Stopped:Wait()
-
-		-- After equip animation, start idle
-		if isEquipped then
-			playIdleAnimation()
+local function SetAimingState(aiming)
+	if not aimingValue then
+		local character = player.Character
+		if character then
+			aimingValue = character:FindFirstChild("IsAiming")
+			if not aimingValue then
+				aimingValue = Instance.new("BoolValue")
+				aimingValue.Name = "IsAiming"
+				aimingValue.Parent = character
+			end
 		end
 	end
+
+	if aimingValue then
+		aimingValue.Value = aiming
+	end
 end
-]]
+
+local function CancelSprint()
+	-- Force walk speed when aiming to cancel any sprint
+	if humanoid then
+		humanoid.WalkSpeed = Config.AimingWalkSpeed
+	end
+end
 
 --------------------------------------------------------------------------------
 -- ZOOM SYSTEM
@@ -257,22 +175,16 @@ local function enableZoom()
 	if isZooming then return end
 	isZooming = true
 
-	-- Tween camera FOV
+	-- Set aiming state for SprintController to detect
+	SetAimingState(true)
+
+	-- Cancel sprint by setting walk speed
+	CancelSprint()
+
+	-- Tween camera FOV only (no vignette or blur)
 	local tweenInfo = TweenInfo.new(Config.ZoomTweenTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	local fovTween = TweenService:Create(camera, tweenInfo, {FieldOfView = Config.ZoomFOV})
 	fovTween:Play()
-
-	-- Enable vignette effect
-	if vignetteGui then
-		vignetteGui.Enabled = true
-	end
-
-	-- Enable and tween blur
-	if blurEffect then
-		blurEffect.Enabled = true
-		local blurTween = TweenService:Create(blurEffect, tweenInfo, {Size = Config.VignetteBlurSize})
-		blurTween:Play()
-	end
 
 	-- Play zoom animation if available
 	--[[
@@ -287,28 +199,13 @@ local function disableZoom()
 	if not isZooming then return end
 	isZooming = false
 
+	-- Clear aiming state
+	SetAimingState(false)
+
 	-- Tween camera FOV back
 	local tweenInfo = TweenInfo.new(Config.ZoomTweenTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	local fovTween = TweenService:Create(camera, tweenInfo, {FieldOfView = Config.DefaultFOV})
 	fovTween:Play()
-
-	-- Tween blur out then disable
-	if blurEffect then
-		local blurTween = TweenService:Create(blurEffect, tweenInfo, {Size = 0})
-		blurTween:Play()
-		blurTween.Completed:Connect(function()
-			if not isZooming then
-				blurEffect.Enabled = false
-			end
-		end)
-	end
-
-	-- Disable vignette after tween
-	task.delay(Config.ZoomTweenTime, function()
-		if not isZooming and vignetteGui then
-			vignetteGui.Enabled = false
-		end
-	end)
 
 	-- Stop zoom animation if playing
 	--[[
@@ -387,6 +284,15 @@ local function onToolEquipped()
 		animator.Parent = humanoid
 	end
 
+	-- Create aiming state value
+	aimingValue = character:FindFirstChild("IsAiming")
+	if not aimingValue then
+		aimingValue = Instance.new("BoolValue")
+		aimingValue.Name = "IsAiming"
+		aimingValue.Value = false
+		aimingValue.Parent = character
+	end
+
 	-- Load animations
 	idleTrack = loadAnimation(AnimationIds.Idle)
 	idleRunningTrack = loadAnimation(AnimationIds.IdleRunning)
@@ -404,37 +310,8 @@ local function onToolEquipped()
 		idleRunningTrack.Priority = Enum.AnimationPriority.Action
 	end
 
-	--[[
-	-- EQUIP ANIMATION (COMMENTED OUT)
-	-- TODO: Add equip animation asset ID in AnimationIds.Equip to enable
-	equipTrack = loadAnimation(AnimationIds.Equip)
-	if equipTrack then
-		equipTrack.Looped = false
-		equipTrack.Priority = Enum.AnimationPriority.Action
-		playEquipAnimation()
-	else
-		-- No equip animation, go straight to idle
-		playIdleAnimation()
-	end
-	]]
-
-	-- Start with idle animation (since equip is commented out)
+	-- Start with idle animation
 	playIdleAnimation()
-
-	-- Load zoom animation (commented out until ID is added)
-	--[[
-	-- TODO: Uncomment when zoom animation ID is added
-	zoomTrack = loadAnimation(AnimationIds.Zoom)
-	if zoomTrack then
-		zoomTrack.Looped = true
-		zoomTrack.Priority = Enum.AnimationPriority.Action
-	end
-	]]
-
-	-- Create vignette GUI if not exists
-	if not vignetteGui then
-		createVignetteGui()
-	end
 end
 
 local function onToolUnequipped()
@@ -446,6 +323,11 @@ local function onToolUnequipped()
 	-- Disable zoom if active
 	if isZooming then
 		disableZoom()
+	end
+
+	-- Clean up aiming state
+	if aimingValue then
+		aimingValue.Value = false
 	end
 
 	-- Clean up animation tracks
